@@ -1,6 +1,7 @@
 # Globe Screenshot
 
-Tap the 🌐 key on its own to take an area screenshot, the same as ⇧⌘4. It lives in the menu bar and starts at login.
+Tap the 🌐 key on its own to take an area screenshot, the same as ⇧⌘4, and get it on the clipboard as well. It lives
+in the menu bar and starts at login.
 
 ## Setup
 
@@ -10,6 +11,7 @@ Tap the 🌐 key on its own to take an area screenshot, the same as ⇧⌘4. It 
 3. Allow **Accessibility** when macOS asks (System Settings > Privacy & Security > Accessibility).
 4. In System Settings > Keyboard, set **Press 🌐 key to** to **Do Nothing**. Otherwise every tap also opens the emoji
    picker or switches the input source.
+5. Allow access to the **Desktop** folder when macOS asks. The app reads the saved screenshot to copy it.
 
 The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links to whatever is still missing.
 
@@ -20,9 +22,13 @@ The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links 
 - A press counts as a tap when 🌐 is down for under 0.5 s, no other modifier is held, and no other key goes down
   in the meantime. 🌐←, 🌐⌫, 🌐F and the other 🌐 shortcuts keep working.
 - On a tap it posts ⇧⌘4, so macOS's own screenshot tool runs with your settings: save location, floating thumbnail,
-  ⌃ to copy to the clipboard, Space to capture a window.
+  Space to capture a window.
+- When macOS saves the file, the app copies the image to the clipboard too. With the floating thumbnail on, macOS
+  saves the file only after the thumbnail goes away, so the copy waits for that. To get both right away, turn off
+  Show Floating Thumbnail in ⇧⌘5 > Options.
 - The app only receives the 🌐 key's up and down state. For other keys it just asks macOS how long ago one was
-  last pressed. Between taps nothing runs: no timers, no polling.
+  last pressed. Between taps nothing runs. After a tap, the app waits for a file system event from the screenshot
+  folder (for up to 5 minutes), with no polling.
 
 ## Notes
 
@@ -33,4 +39,4 @@ The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links 
   the permissions again after every rebuild.
 - Open at Login turns on the first time the app runs. You can turn it off from the menu.
 - To uninstall: turn off Open at Login, quit the app, delete it from `~/Applications`, and remove it from Input
-  Monitoring and Accessibility.
+  Monitoring, Accessibility and Files & Folders.
