@@ -1,7 +1,8 @@
 # Globe Screenshot
 
-Tap the 🌐 key on its own for macOS's own area screenshot, the same as ⇧⌘4 with its floating card, and the image also
-goes on the clipboard once macOS saves the file. It lives in the menu bar and starts at login. ⇧⌘4 itself is untouched.
+Tap the 🌐 key on its own for an area screenshot that's on the clipboard and saved as the usual file the moment you
+finish selecting, with a thumbnail card in the corner. It lives in the menu bar and starts at login. ⇧⌘4 itself is
+untouched.
 
 ## Setup
 
@@ -12,7 +13,7 @@ goes on the clipboard once macOS saves the file. It lives in the menu bar and st
 4. In System Settings > Keyboard, set **Press 🌐︎ key to** to **Do Nothing**. Otherwise every tap also opens the emoji
    picker or switches the input source. (Keyboard Shortcuts > Modifier Keys > **Globe (🌐︎) key: No Action** also
    stops that, and the app still works, but it turns the key off for macOS completely, so 🌐 combos stop working too.)
-5. Allow access to the **Desktop** folder when macOS asks. The app reads the saved screenshot to copy it.
+5. Allow access to the **Desktop** folder when macOS asks. The app saves the screenshot file there.
 
 The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links to whatever is still missing.
 
@@ -22,15 +23,18 @@ The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links 
   is set to Do Nothing, macOS sends no key event for 🌐, so a regular event tap never sees it.
 - A press counts as a tap when 🌐 is down for under 0.5 s, no other modifier is held, and no other key goes down
   in the meantime. 🌐←, 🌐⌫, 🌐F and the other 🌐 shortcuts keep working.
-- On a tap it posts ⇧⌘4, so macOS's own screenshot tool runs with your settings: save location, floating thumbnail,
-  Space to capture a window.
-- When macOS saves the file, the app copies the image to the clipboard too. With the floating thumbnail on, macOS
-  saves the file only when the thumbnail goes away (after about 5 seconds, or at once if you swipe it off), so the
-  copy happens then. macOS holds the image inside the thumbnail until that point, so no app can copy it sooner. To
-  get the file and the copy right away, turn off Show Floating Thumbnail in ⇧⌘5 > Options.
+- On a tap it posts ⌃⇧⌘4, macOS's own "copy selected area to the clipboard" screenshot, so the crosshair is macOS's
+  and the image is on the clipboard the moment you finish selecting. Space still switches to capturing a window.
+- The app then saves the same image the way ⇧⌘4 would: in your screenshot folder (the Desktop by default), named
+  "Screenshot 2026-09-29 at 11.07.51 AM.png", PNG at 144 DPI on Retina, tagged as a screenshot for Spotlight,
+  extension hidden.
+- A card like macOS's floating thumbnail slides in at the bottom right and leaves after 5 seconds, or stays while the
+  pointer is on it. Click it to open the screenshot in Preview, drag it into another app or a folder (they get a copy;
+  the saved file stays), swipe it away, or right-click for Show in Finder and Delete. macOS's own card can't be used:
+  it holds the image until it goes away, and dragging it means the file is never saved.
 - The app only receives the 🌐 key's up and down state. For other keys it just asks macOS how long ago one was
-  last pressed. Between taps nothing runs. After a tap, the app waits for a file system event from the screenshot
-  folder (for up to 5 minutes), with no polling.
+  last pressed. Between taps nothing runs. While the crosshair is up, the app waits for the system's `screencapture`
+  process to exit, which is a process event, not polling.
 
 ## Notes
 
