@@ -1,4 +1,4 @@
-// Globe Screenshot: tap the 🌐 (fn) key on its own to take an area screenshot that lands on the clipboard and in the
+// Globeshot: tap the 🌐 (fn) key on its own to take an area screenshot that lands on the clipboard and in the
 // usual file at the same moment, with a thumbnail card in the corner. ⇧⌘4 is left to macOS. Menu bar only. The key is
 // read straight from the keyboard over IOHID, because macOS sends no key event for 🌐 when "Press 🌐︎ key to" is set
 // to Do Nothing. The capture itself is the system's: the app posts ⌃⇧⌘4 (area to clipboard), then saves that image
@@ -26,12 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let otherModifiers: CGEventFlags = [.maskShift, .maskControl, .maskAlternate, .maskCommand]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem.button?.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Globe Screenshot")
+        statusItem.button?.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Globeshot")
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
 
-        registerLoginItemOnFirstLaunch()
+        registerLoginItem()
         listenToGlobeKey()
         // One prompt at a time: Input Monitoring first (macOS relaunches the app after it), then Accessibility.
         if keyboards != nil && !AXIsProcessTrusted() {
@@ -235,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         menu.addItem(login)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Globe Screenshot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit Globeshot", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         refreshIcon()
     }
 
@@ -287,11 +287,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Open at login
 
-    private func registerLoginItemOnFirstLaunch() {
-        guard !UserDefaults.standard.bool(forKey: "loginItemSetUp") else { return }
-        UserDefaults.standard.set(true, forKey: "loginItemSetUp")
-        do { try SMAppService.mainApp.register() } catch { log.error("open at login failed: \(error.localizedDescription, privacy: .public)") }
-        log.notice("open at login: \(SMAppService.mainApp.status == .enabled ? "on" : "off", privacy: .public)")
+    /// Turns Open at Login on at the first launch. After that it only re-registers when the app has moved or been
+    /// renamed, so the login item points at this copy; turning it off stays off.
+    private func registerLoginItem() {
+        let defaults = UserDefaults.standard
+        let path = Bundle.main.bundlePath
+        let isFirstLaunch = !defaults.bool(forKey: "loginItemSetUp")
+        let hasMoved = defaults.string(forKey: "loginItemPath") != path
+        guard isFirstLaunch || (hasMoved && SMAppService.mainApp.status == .enabled) else { return }
+        do {
+            if !isFirstLaunch { try? SMAppService.mainApp.unregister() }
+            try SMAppService.mainApp.register()
+        } catch {
+            log.error("open at login failed: \(error.localizedDescription, privacy: .public)")
+        }
+        defaults.set(true, forKey: "loginItemSetUp")
+        defaults.set(path, forKey: "loginItemPath")
+        log.notice("open at login: \(SMAppService.mainApp.status == .enabled ? "on" : "off", privacy: .public) for \(path, privacy: .public)")
     }
 
     @objc private func toggleLoginItem() {

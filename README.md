@@ -1,4 +1,4 @@
-# Globe Screenshot
+# Globeshot
 
 Tap the 🌐 key on its own for an area screenshot that's on the clipboard and saved as the usual file the moment you
 finish selecting, with a thumbnail card in the corner. It lives in the menu bar and starts at login. ⇧⌘4 itself is
@@ -6,7 +6,7 @@ untouched.
 
 ## Setup
 
-1. `./build.sh` builds the app, installs it to `~/Applications/Globe Screenshot.app` and starts it.
+1. `./build.sh` builds the app, installs it to `~/Applications/Globeshot.app` and starts it.
 2. Allow **Input Monitoring** when macOS asks (System Settings > Privacy & Security > Input Monitoring). When macOS
    offers to quit and reopen the app, choose Quit & Reopen.
 3. Allow **Accessibility** when macOS asks (System Settings > Privacy & Security > Accessibility).

@@ -1,13 +1,13 @@
 #!/bin/zsh
-# Builds Globe Screenshot.app, installs it to ~/Applications and (re)starts it.
+# Builds Globeshot.app, installs it to ~/Applications and (re)starts it.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-NAME="Globe Screenshot"
+NAME="Globeshot"
 APP="build/$NAME.app"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS"
-swiftc -O -target "$(uname -m)-apple-macos14.0" -o "$APP/Contents/MacOS/GlobeScreenshot" Sources/*.swift
+swiftc -O -target "$(uname -m)-apple-macos14.0" -o "$APP/Contents/MacOS/Globeshot" Sources/*.swift
 cp Info.plist "$APP/Contents/Info.plist"
 
 # Sign with a stable identity so the Input Monitoring and Accessibility grants survive rebuilds.
@@ -22,7 +22,7 @@ else
   codesign --force --sign - "$APP"
 fi
 
-pkill -x GlobeScreenshot && sleep 0.5 || true
+pkill -x Globeshot && sleep 0.5 || true
 mkdir -p "$HOME/Applications"
 rm -rf "$HOME/Applications/$NAME.app"
 ditto "$APP" "$HOME/Applications/$NAME.app"

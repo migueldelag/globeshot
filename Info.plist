@@ -5,11 +5,11 @@
     <key>CFBundleIdentifier</key>
     <string>com.miguel.globe-screenshot</string>
     <key>CFBundleName</key>
-    <string>Globe Screenshot</string>
+    <string>Globeshot</string>
     <key>CFBundleDisplayName</key>
-    <string>Globe Screenshot</string>
+    <string>Globeshot</string>
     <key>CFBundleExecutable</key>
-    <string>GlobeScreenshot</string>
+    <string>Globeshot</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
