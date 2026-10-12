@@ -1,13 +1,12 @@
-// Globe Screenshot: tap the 🌐 (fn) key on its own, or press ⇧⌘4, to take an area screenshot that lands on the
-// clipboard and in the usual file at the same moment, with a thumbnail card in the corner. Menu bar only. The key is
-// read straight from the keyboard over IOHID, because macOS sends no key event for 🌐 when "Press 🌐 key to" is set
-// to Do Nothing. The capture itself is the system's: the app posts ⌃⇧⌘4 (area to clipboard), then saves that image
-// as the file ⇧⌘4 would have written and shows the card.
+// Globe Screenshot: tap the 🌐 (fn) key on its own for macOS's own area screenshot (⇧⌘4, with its floating card),
+// and the image also goes on the clipboard once macOS saves the file. Menu bar only. The key is read straight from
+// the keyboard over IOHID, because macOS sends no key event for 🌐 when "Press 🌐︎ key to" is set to Do Nothing.
 
 import AppKit
 import Carbon.HIToolbox
 import IOKit.hid
 import ServiceManagement
+import UniformTypeIdentifiers
 import os
 
 private let log = Logger(subsystem: "com.miguel.globe-screenshot", category: "app")
@@ -18,9 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var keyboards: IOHIDManager?
     private var globeIsDown = false
     private var pressedAt: TimeInterval?  // nil while the current press can't be a tap
-    private var captureEnd: DispatchSourceProcess?
-    private var isCapturing = false
-    private var terminationSignal: DispatchSourceSignal?
+    private var screenshotWatch: DispatchSourceFileSystemObject?
 
     /// Held longer than this, 🌐 counts as a modifier rather than a tap.
     private let maxTap: TimeInterval = 0.5
@@ -39,27 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
         }
         // The Desktop is privacy-protected: ask for access now rather than in the middle of a capture.
-        let folder = ScreenshotFile.folder.path
+        let folder = screenshotFolder.path
         DispatchQueue.global(qos: .utility).async { _ = try? FileManager.default.contentsOfDirectory(atPath: folder) }
-        takeOverShiftCommand4()
-        // `pkill` sends SIGTERM; quit properly so ⇧⌘4 goes back to macOS.
-        signal(SIGTERM, SIG_IGN)
-        let terminationSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        terminationSignal.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
-        terminationSignal.resume()
-        self.terminationSignal = terminationSignal
         refreshIcon()
-    }
-
-    func applicationWillTerminate(_ notification: Notification) {
-        ShiftCommand4.giveBack()
-    }
-
-    /// While the app runs, ⇧⌘4 does what a 🌐 tap does. It needs Accessibility to post ⌃⇧⌘4.
-    private func takeOverShiftCommand4() {
-        guard AXIsProcessTrusted(), !ShiftCommand4.isTakenOver else { return }
-        let isTakenOver = ShiftCommand4.takeOver { [weak self] in self?.takeAreaScreenshot() }
-        log.notice("⇧⌘4: \(isTakenOver ? "taken over" : "left to macOS", privacy: .public)")
     }
 
     // MARK: 🌐 key
@@ -111,21 +90,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if isTap { takeAreaScreenshot() }
     }
 
-    /// Posts ⌃⇧⌘4, the system shortcut for "Copy picture of selected area to the clipboard", so the image is on the
-    /// clipboard the moment the selection ends, then saves the same image as the usual file.
+    /// Posts ⇧⌘4, the system shortcut for "Save picture of selected area as a file", then copies that file.
     private func takeAreaScreenshot() {
         refreshIcon()
-        guard !isCapturing else { return }  // the crosshair is already up
         guard AXIsProcessTrusted() else {
-            log.error("⌃⇧⌘4 not sent: Accessibility access is off")
+            log.error("⇧⌘4 not sent: Accessibility access is off")
             return
         }
-        ThumbnailCard.hide()  // out of the way of the next capture
-        isCapturing = true
-        let earlierCaptures = processIDs(named: "screencapture")
-        let changeCount = NSPasteboard.general.changeCount
-        press(kVK_ANSI_4, holding: [(kVK_Control, .maskControl), (kVK_Shift, .maskShift), (kVK_Command, .maskCommand)])
-        saveWhenCaptureEnds(changeCount: changeCount, ignoring: earlierCaptures)
+        copyScreenshotToClipboard(savedAfter: Date())
+        press(kVK_ANSI_4, holding: [(kVK_Command, .maskCommand), (kVK_Shift, .maskShift)])
     }
 
     /// Holds the modifiers down in order, taps the key, then lets go, the way fingers would.
@@ -150,89 +123,77 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: Screenshot file
+    // MARK: Clipboard copy
 
-    /// The system runs a `screencapture` process while the crosshair is up. Once it exits, the image is on the
-    /// clipboard, unless the capture was cancelled.
-    private func saveWhenCaptureEnds(changeCount: Int, ignoring earlier: Set<pid_t>, triesLeft: Int = 60) {
-        guard let pid = processIDs(named: "screencapture").subtracting(earlier).first else {
-            if triesLeft == 0 {
-                isCapturing = false
-                log.error("the screenshot tool didn't start, so no file was saved")
-                return
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                MainActor.assumeIsolated { self?.saveWhenCaptureEnds(changeCount: changeCount, ignoring: earlier, triesLeft: triesLeft - 1) }
-            }
+    /// Where ⇧⌘4 saves: the screenshot "location" setting, the Desktop by default.
+    private var screenshotFolder: URL {
+        CFPreferencesAppSynchronize("com.apple.screencapture" as CFString)
+        if let path = CFPreferencesCopyAppValue("location" as CFString, "com.apple.screencapture" as CFString) as? String {
+            return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+    }
+
+    /// Watches the screenshot folder until this capture's file lands, then puts the image on the clipboard.
+    /// With the floating thumbnail on, macOS saves the file only once the thumbnail goes away.
+    private func copyScreenshotToClipboard(savedAfter start: Date) {
+        screenshotWatch?.cancel()
+        let folder = screenshotFolder
+        let fd = open(folder.path, O_EVTONLY)
+        guard fd >= 0 else {
+            log.error("can't watch \(folder.path, privacy: .public) for the screenshot")
             return
         }
-        captureEnd?.cancel()
-        let exit = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
-        exit.setEventHandler { [weak self] in
-            exit.cancel()
-            MainActor.assumeIsolated {
-                self?.isCapturing = false
-                self?.saveClipboardImage(changedSince: changeCount)
-            }
+        let watch = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        watch.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.copyNewScreenshot(in: folder, savedAfter: start, watch: watch, retries: 5) }
         }
-        exit.resume()
-        captureEnd = exit
-        if kill(pid, 0) != 0 {  // it ended before the watch was in place
-            exit.cancel()
-            isCapturing = false
-            saveClipboardImage(changedSince: changeCount)
+        watch.setCancelHandler { close(fd) }
+        watch.resume()
+        screenshotWatch = watch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 300) { watch.cancel() }  // a cancelled capture saves nothing
+    }
+
+    private func copyNewScreenshot(in folder: URL, savedAfter start: Date, watch: DispatchSourceFileSystemObject, retries: Int) {
+        guard !watch.isCancelled else { return }
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.creationDateKey], options: .skipsHiddenFiles)) ?? []
+        let saved = files
+            .compactMap { file in (try? file.resourceValues(forKeys: [.creationDateKey]).creationDate).map { (file, $0) } }
+            .filter { $0.1 >= start }
+            .sorted { $0.1 > $1.1 }
+            .map(\.0)
+        guard !saved.isEmpty else { return }
+        for file in saved where isScreenCapture(file) {
+            guard let data = finishedImageData(file), let type = UTType(filenameExtension: file.pathExtension) else { continue }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setData(data, forType: NSPasteboard.PasteboardType(type.identifier))
+            watch.cancel()
+            log.notice("copied \(file.lastPathComponent, privacy: .public) to the clipboard")
+            return
+        }
+        // A new file that isn't finished or tagged yet: look again shortly.
+        guard retries > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            MainActor.assumeIsolated { self?.copyNewScreenshot(in: folder, savedAfter: start, watch: watch, retries: retries - 1) }
         }
     }
 
-    /// Saves the capture from the clipboard as the file ⇧⌘4 would have written, then shows the card.
-    private func saveClipboardImage(changedSince changeCount: Int, checksLeft: Int = 20) {
-        let pasteboard = NSPasteboard.general
-        guard pasteboard.changeCount != changeCount else {
-            // Cancelled, or the clipboard is written a moment after the process ends: check again for up to a second.
-            guard checksLeft > 0 else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
-                MainActor.assumeIsolated { self?.saveClipboardImage(changedSince: changeCount, checksLeft: checksLeft - 1) }
-            }
-            return
-        }
-        guard let image = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) else { return }
-        let pointer = NSEvent.mouseLocation  // the selection ends on the display under the pointer
-        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? NSScreen.main else { return }
-        let scale = screen.backingScaleFactor
-        let (screenFrame, visibleFrame) = (screen.frame, screen.visibleFrame)
-        let file = ScreenshotFile.url(for: Date(), in: ScreenshotFile.folder)
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try ScreenshotFile.save(image, dpi: 72 * scale, to: file)
-                log.notice("saved \(file.lastPathComponent, privacy: .public)")
-                guard let thumbnail = ThumbnailCard.thumbnail(of: image) else { return }
-                let size = NSSize(width: thumbnail.pixels.width / scale, height: thumbnail.pixels.height / scale)
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated {
-                        ThumbnailCard.show(thumbnail.image, size: size, file: file, screenFrame: screenFrame, visibleFrame: visibleFrame)
-                    }
-                }
-            } catch {
-                log.error("couldn't save the screenshot: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+    /// macOS tags every screenshot it saves with this Spotlight attribute.
+    private func isScreenCapture(_ file: URL) -> Bool {
+        getxattr(file.path, "com.apple.metadata:kMDItemIsScreenCapture", nil, 0, 0, 0) > 0
     }
 
-    /// PIDs of running processes with this name. `screencapture` is a plain binary, so NSWorkspace doesn't list it.
-    private func processIDs(named name: String) -> Set<pid_t> {
-        var pids = [pid_t](repeating: 0, count: 4096)
-        let count = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
-        return Set(pids.prefix(max(count, 0)).filter { pid in
-            var buffer = [CChar](repeating: 0, count: 256)
-            return proc_name(pid, &buffer, UInt32(buffer.count)) > 0 && String(cString: buffer) == name
-        })
+    /// The file's bytes once it's completely written. A finished PNG ends with its IEND chunk.
+    private func finishedImageData(_ file: URL) -> Data? {
+        guard let data = try? Data(contentsOf: file), !data.isEmpty else { return nil }
+        let pngEnd = Data([0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82])
+        return file.pathExtension.lowercased() != "png" || data.suffix(8) == pngEnd ? data : nil
     }
 
     // MARK: Menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         listenToGlobeKey()  // picks up an Input Monitoring grant made while running
-        takeOverShiftCommand4()  // and an Accessibility grant
         menu.removeAllItems()
         if keyboards == nil {
             if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted {
@@ -248,8 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("Set “Press 🌐︎ key to” to Do Nothing…", #selector(openKeyboardSettings)))
         }
         if menu.items.isEmpty {
-            let hint = ShiftCommand4.isTakenOver ? "Tap 🌐 or press ⇧⌘4 for an area screenshot" : "Tap 🌐 for an area screenshot"
-            menu.addItem(NSMenuItem(title: hint, action: nil, keyEquivalent: ""))
+            menu.addItem(NSMenuItem(title: "Tap 🌐 for an area screenshot", action: nil, keyEquivalent: ""))
         }
         menu.addItem(.separator())
         let login = item("Open at Login", #selector(toggleLoginItem))
