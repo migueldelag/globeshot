@@ -28,7 +28,7 @@ The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links 
 - The app then saves the same image the way ⇧⌘4 would: in your screenshot folder (the Desktop by default), named
   "Screenshot 2026-09-29 at 11.07.51 AM.png", PNG at 144 DPI on Retina, tagged as a screenshot for Spotlight,
   extension hidden.
-- A card like macOS's floating thumbnail slides in at the bottom right and leaves after 5 seconds, or stays while the
+- A card like macOS's floating thumbnail fades in at the bottom right and leaves after 5 seconds, or stays while the
   pointer is on it. Click it to open the screenshot in Preview, drag it into another app or a folder (they get a copy;
   the saved file stays), swipe it away, or right-click for Show in Finder and Delete. macOS's own card can't be used:
   it holds the image until it goes away, and dragging it means the file is never saved.

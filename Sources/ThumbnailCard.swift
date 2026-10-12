@@ -1,6 +1,6 @@
 // A stand-in for macOS's floating screenshot thumbnail, which macOS only shows for captures it saves to a file
-// itself. It slides in at the bottom right of the screen the capture was taken on, stays 5 seconds (as long as you
-// like while the pointer is on it), then slides away. Click to open in Preview, drag it into another app, swipe it
+// itself. It fades in at the bottom right of the screen the capture was taken on, like macOS's, stays 5 seconds (as
+// long as you like while the pointer is on it), then slides away. Click to open in Preview, drag it into another app, swipe it
 // off, or right-click for Show in Finder and Delete.
 
 import AppKit
@@ -19,7 +19,7 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
         current?.close(animated: false)
         let card = ThumbnailCard(thumbnail, size: size, file: file, screenFrame: screenFrame, visibleFrame: visibleFrame)
         current = card
-        card.slideIn()
+        card.fadeIn()
     }
 
     /// Takes the card down at once, so it doesn't end up in the next capture.
@@ -55,7 +55,7 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
         shownFrame = NSRect(x: visibleFrame.maxX - Self.margin - cardSize.width, y: visibleFrame.minY + Self.margin,
                             width: cardSize.width, height: cardSize.height)
         hiddenFrame = shownFrame.offsetBy(dx: screenFrame.maxX + Self.margin - shownFrame.minX, dy: 0)  // just past the right edge
-        panel = NSPanel(contentRect: hiddenFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = NSPanel(contentRect: shownFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -69,14 +69,14 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
         panel.contentView = CardView(thumbnail, card: self)
     }
 
-    private func slideIn() {
-        panel.setFrame(hiddenFrame, display: true)
+    private func fadeIn() {
+        panel.alphaValue = 0
         panel.orderFrontRegardless()
         panel.invalidateShadow()
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.35
-            context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
-            panel.animator().setFrame(shownFrame, display: true)
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
         }
         restartTimer()
     }
