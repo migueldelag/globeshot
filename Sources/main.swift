@@ -1,7 +1,8 @@
-// Globe Screenshot: tap the 🌐 (fn) key on its own to take an area screenshot that lands on the clipboard and in the
-// usual file at the same moment. Menu bar only. The key is read straight from the keyboard over IOHID, because macOS
-// sends no key event for 🌐 when "Press 🌐 key to" is set to Do Nothing. The capture itself is the system's: the app
-// posts ⌃⇧⌘4 (area to clipboard), then saves that image as the file ⇧⌘4 would have written.
+// Globe Screenshot: tap the 🌐 (fn) key on its own, or press ⇧⌘4, to take an area screenshot that lands on the
+// clipboard and in the usual file at the same moment, with a thumbnail card in the corner. Menu bar only. The key is
+// read straight from the keyboard over IOHID, because macOS sends no key event for 🌐 when "Press 🌐 key to" is set
+// to Do Nothing. The capture itself is the system's: the app posts ⌃⇧⌘4 (area to clipboard), then saves that image
+// as the file ⇧⌘4 would have written and shows the card.
 
 import AppKit
 import Carbon.HIToolbox
@@ -18,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var globeIsDown = false
     private var pressedAt: TimeInterval?  // nil while the current press can't be a tap
     private var captureEnd: DispatchSourceProcess?
+    private var isCapturing = false
+    private var terminationSignal: DispatchSourceSignal?
 
     /// Held longer than this, 🌐 counts as a modifier rather than a tap.
     private let maxTap: TimeInterval = 0.5
@@ -38,7 +41,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The Desktop is privacy-protected: ask for access now rather than in the middle of a capture.
         let folder = ScreenshotFile.folder.path
         DispatchQueue.global(qos: .utility).async { _ = try? FileManager.default.contentsOfDirectory(atPath: folder) }
+        takeOverShiftCommand4()
+        // `pkill` sends SIGTERM; quit properly so ⇧⌘4 goes back to macOS.
+        signal(SIGTERM, SIG_IGN)
+        let terminationSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminationSignal.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        terminationSignal.resume()
+        self.terminationSignal = terminationSignal
         refreshIcon()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        ShiftCommand4.giveBack()
+    }
+
+    /// While the app runs, ⇧⌘4 does what a 🌐 tap does. It needs Accessibility to post ⌃⇧⌘4.
+    private func takeOverShiftCommand4() {
+        guard AXIsProcessTrusted(), !ShiftCommand4.isTakenOver else { return }
+        let isTakenOver = ShiftCommand4.takeOver { [weak self] in self?.takeAreaScreenshot() }
+        log.notice("⇧⌘4: \(isTakenOver ? "taken over" : "left to macOS", privacy: .public)")
     }
 
     // MARK: 🌐 key
@@ -94,10 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// clipboard the moment the selection ends, then saves the same image as the usual file.
     private func takeAreaScreenshot() {
         refreshIcon()
+        guard !isCapturing else { return }  // the crosshair is already up
         guard AXIsProcessTrusted() else {
             log.error("⌃⇧⌘4 not sent: Accessibility access is off")
             return
         }
+        ThumbnailCard.hide()  // out of the way of the next capture
+        isCapturing = true
         let earlierCaptures = processIDs(named: "screencapture")
         let changeCount = NSPasteboard.general.changeCount
         press(kVK_ANSI_4, holding: [(kVK_Control, .maskControl), (kVK_Shift, .maskShift), (kVK_Command, .maskCommand)])
@@ -133,6 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func saveWhenCaptureEnds(changeCount: Int, ignoring earlier: Set<pid_t>, triesLeft: Int = 60) {
         guard let pid = processIDs(named: "screencapture").subtracting(earlier).first else {
             if triesLeft == 0 {
+                isCapturing = false
                 log.error("the screenshot tool didn't start, so no file was saved")
                 return
             }
@@ -145,17 +170,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let exit = DispatchSource.makeProcessSource(identifier: pid, eventMask: .exit, queue: .main)
         exit.setEventHandler { [weak self] in
             exit.cancel()
-            MainActor.assumeIsolated { self?.saveClipboardImage(changedSince: changeCount) }
+            MainActor.assumeIsolated {
+                self?.isCapturing = false
+                self?.saveClipboardImage(changedSince: changeCount)
+            }
         }
         exit.resume()
         captureEnd = exit
         if kill(pid, 0) != 0 {  // it ended before the watch was in place
             exit.cancel()
+            isCapturing = false
             saveClipboardImage(changedSince: changeCount)
         }
     }
 
-    /// Saves the capture from the clipboard as the file ⇧⌘4 would have written.
+    /// Saves the capture from the clipboard as the file ⇧⌘4 would have written, then shows the card.
     private func saveClipboardImage(changedSince changeCount: Int, checksLeft: Int = 20) {
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != changeCount else {
@@ -168,12 +197,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         guard let image = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) else { return }
         let pointer = NSEvent.mouseLocation  // the selection ends on the display under the pointer
-        let scale = NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) }?.backingScaleFactor ?? 2
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? NSScreen.main else { return }
+        let scale = screen.backingScaleFactor
+        let (screenFrame, visibleFrame) = (screen.frame, screen.visibleFrame)
         let file = ScreenshotFile.url(for: Date(), in: ScreenshotFile.folder)
-        DispatchQueue.global(qos: .utility).async {
+        DispatchQueue.global(qos: .userInitiated).async {
             do {
                 try ScreenshotFile.save(image, dpi: 72 * scale, to: file)
                 log.notice("saved \(file.lastPathComponent, privacy: .public)")
+                guard let thumbnail = ThumbnailCard.thumbnail(of: image) else { return }
+                let size = NSSize(width: thumbnail.pixels.width / scale, height: thumbnail.pixels.height / scale)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        ThumbnailCard.show(thumbnail.image, size: size, file: file, screenFrame: screenFrame, visibleFrame: visibleFrame)
+                    }
+                }
             } catch {
                 log.error("couldn't save the screenshot: \(error.localizedDescription, privacy: .public)")
             }
@@ -194,6 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         listenToGlobeKey()  // picks up an Input Monitoring grant made while running
+        takeOverShiftCommand4()  // and an Accessibility grant
         menu.removeAllItems()
         if keyboards == nil {
             if IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted {
@@ -206,10 +245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item("Allow Accessibility…", #selector(openAccessibilitySettings)))
         }
         if globeKeyHasSystemAction {
-            menu.addItem(item("Set “Press 🌐 key to” to Do Nothing…", #selector(openKeyboardSettings)))
+            menu.addItem(item("Set “Press 🌐︎ key to” to Do Nothing…", #selector(openKeyboardSettings)))
         }
         if menu.items.isEmpty {
-            menu.addItem(NSMenuItem(title: "Tap 🌐 for an area screenshot", action: nil, keyEquivalent: ""))
+            let hint = ShiftCommand4.isTakenOver ? "Tap 🌐 or press ⇧⌘4 for an area screenshot" : "Tap 🌐 for an area screenshot"
+            menu.addItem(NSMenuItem(title: hint, action: nil, keyEquivalent: ""))
         }
         menu.addItem(.separator())
         let login = item("Open at Login", #selector(toggleLoginItem))
@@ -231,11 +271,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.appearsDisabled = keyboards == nil || !AXIsProcessTrusted()
     }
 
-    /// False only when Keyboard settings has "Press 🌐 key to" on Do Nothing (0). Anything else also opens
-    /// the emoji picker, switches input source or starts dictation on every tap.
+    /// False when Keyboard settings has "Press 🌐︎ key to" on Do Nothing (0), or Modifier Keys has the 🌐︎ key on
+    /// No Action. Otherwise every tap also opens the emoji picker, switches input source or starts dictation.
     private var globeKeyHasSystemAction: Bool {
         CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
-        return (CFPreferencesCopyAppValue("AppleFnUsageType" as CFString, "com.apple.HIToolbox" as CFString) as? Int) != 0
+        let usage = CFPreferencesCopyAppValue("AppleFnUsageType" as CFString, "com.apple.HIToolbox" as CFString) as? Int
+        return usage != 0 && !globeKeyIsOff
+    }
+
+    /// Modifier Keys keeps "Globe key: No Action" per keyboard, mapping fn (0xFF01/0x03 or 0xFF/0x03) to no key (0x07/0x00).
+    private var globeKeyIsOff: Bool {
+        let (app, user, host) = (kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost)
+        CFPreferencesSynchronize(app, user, host)
+        let keys = CFPreferencesCopyKeyList(app, user, host) as? [String] ?? []
+        return keys.filter { $0.hasPrefix("com.apple.keyboard.modifiermapping") }.contains { key in
+            let pairs = CFPreferencesCopyValue(key as CFString, app, user, host) as? [[String: Int]] ?? []
+            return pairs.contains { [0xFF01_0000_0003, 0xFF_0000_0003].contains($0["HIDKeyboardModifierMappingSrc"]) && $0["HIDKeyboardModifierMappingDst"] == 0x7_0000_0000 }
+        }
     }
 
     @objc private func openInputMonitoringSettings() { openSettings("com.apple.preference.security?Privacy_ListenEvent") }
