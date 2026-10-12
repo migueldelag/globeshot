@@ -1,7 +1,7 @@
 // A stand-in for macOS's floating screenshot thumbnail, which macOS only shows for captures it saves to a file
-// itself. It fades in at the bottom right of the screen the capture was taken on, like macOS's, stays 5 seconds (as
-// long as you like while the pointer is on it), then slides away. Click to open in Preview, drag it into another app, swipe it
-// off, or right-click for Show in Finder and Delete.
+// itself. It fades in at the bottom right of the screen the capture was taken on, stays 5 seconds (as long as you like
+// while the pointer is on it), then slides away. Click to open in Preview, drag it into another app, swipe it off, or
+// right-click for Show in Finder and Delete.
 
 import AppKit
 import ImageIO
@@ -9,9 +9,15 @@ import ImageIO
 @MainActor
 final class ThumbnailCard: NSObject, NSDraggingSource {
     private static var current: ThumbnailCard?
-    private static let maxSize = NSSize(width: 200, height: 150)
-    private static let minSide: CGFloat = 40
-    private static let margin: CGFloat = 20
+    // Measured from macOS's own card: the image (square corners, at most 150 pt) in a ½ pt white line and a 4 pt black
+    // frame with 5 pt outer corners, a tight rim shadow, 12 pt from the right and bottom edges of the screen.
+    private static let maxImageSide: CGFloat = 150
+    private static let minImageSide: CGFloat = 24
+    fileprivate static let frameWidth: CGFloat = 4
+    fileprivate static let lineWidth: CGFloat = 0.5
+    fileprivate static let cornerRadius: CGFloat = 5
+    fileprivate static let shadowRoom: CGFloat = 4  // transparent room around the card for its rim shadow
+    private static let margin: CGFloat = 12
     private static let stay: TimeInterval = 5
 
     /// Shows the card for a saved capture, replacing any card already up. `size` is the capture's size in points.
@@ -50,29 +56,33 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
     private init(_ thumbnail: CGImage, size: NSSize, file: URL, screenFrame: NSRect, visibleFrame: NSRect) {
         self.thumbnail = thumbnail
         self.file = file
-        let scale = min(Self.maxSize.width / size.width, Self.maxSize.height / size.height, 1)
-        let cardSize = NSSize(width: max(size.width * scale, Self.minSide), height: max(size.height * scale, Self.minSide))
-        shownFrame = NSRect(x: visibleFrame.maxX - Self.margin - cardSize.width, y: visibleFrame.minY + Self.margin,
-                            width: cardSize.width, height: cardSize.height)
-        hiddenFrame = shownFrame.offsetBy(dx: screenFrame.maxX + Self.margin - shownFrame.minX, dy: 0)  // just past the right edge
+        let scale = min(Self.maxImageSide / size.width, Self.maxImageSide / size.height, 1)
+        let fitted = NSSize(width: size.width * scale, height: size.height * scale)
+        let isThinStrip = min(fitted.width, fitted.height) < Self.minImageSide
+        let border = Self.frameWidth + Self.lineWidth
+        let cardSize = NSSize(width: max(fitted.width, Self.minImageSide) + 2 * border,
+                              height: max(fitted.height, Self.minImageSide) + 2 * border)
+        let card = NSRect(x: visibleFrame.maxX - Self.margin - cardSize.width, y: visibleFrame.minY + Self.margin,
+                          width: cardSize.width, height: cardSize.height)
+        shownFrame = card.insetBy(dx: -Self.shadowRoom, dy: -Self.shadowRoom)
+        hiddenFrame = shownFrame.offsetBy(dx: screenFrame.maxX + Self.shadowRoom - card.minX, dy: 0)  // just past the right edge
         panel = NSPanel(contentRect: shownFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false  // the card draws macOS's rim shadow itself; a window shadow is much heavier
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
         panel.sharingType = .none  // keep the card out of screenshots and recordings
-        panel.contentView = CardView(thumbnail, card: self)
+        panel.contentView = CardView(thumbnail, letterboxed: isThinStrip, card: self)
     }
 
     private func fadeIn() {
         panel.alphaValue = 0
         panel.orderFrontRegardless()
-        panel.invalidateShadow()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.25
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -151,7 +161,8 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
     fileprivate func beginDrag(with event: NSEvent, from view: NSView) {
         pauseTimer()
         let item = NSDraggingItem(pasteboardWriter: file as NSURL)
-        item.setDraggingFrame(view.bounds, contents: NSImage(cgImage: thumbnail, size: view.bounds.size))
+        let card = view.bounds.insetBy(dx: Self.shadowRoom, dy: Self.shadowRoom)
+        item.setDraggingFrame(card, contents: NSImage(cgImage: thumbnail, size: card.size))
         view.beginDraggingSession(with: [item], event: event, source: self).animatesToStartingPositionsOnCancelOrFail = true
     }
 
@@ -164,35 +175,52 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
     }
 }
 
-/// The card's face: the capture with rounded corners and a hairline edge, letterboxed when it's a thin strip.
+/// The card's face, built like macOS's: the capture with square corners, a ½ pt white line around it, a black frame
+/// with rounded outer corners, and a rim shadow. Thin strips are letterboxed.
 private final class CardView: NSView {
-    private let thumbnail: CGImage
     private weak var card: ThumbnailCard?
+    private let frameLayer = CALayer()
+    private let imageLayer = CALayer()
+    private let lineLayer = CALayer()
     private var pressedAt: NSPoint?
     private var swipe: CGFloat = 0
 
-    init(_ thumbnail: CGImage, card: ThumbnailCard) {
-        self.thumbnail = thumbnail
+    init(_ thumbnail: CGImage, letterboxed: Bool, card: ThumbnailCard) {
         self.card = card
         super.init(frame: .zero)
         wantsLayer = true
+        frameLayer.cornerRadius = ThumbnailCard.cornerRadius
+        frameLayer.backgroundColor = .black
+        frameLayer.shadowColor = .black
+        frameLayer.shadowOpacity = 0.34  // about 16% at the frame's edge, gone 2 pt out, as measured
+        frameLayer.shadowRadius = 2.2
+        frameLayer.shadowOffset = .zero
+        imageLayer.contents = thumbnail
+        imageLayer.contentsGravity = letterboxed ? .resizeAspect : .resize  // .resize: no sub-pixel gap at the edges
+        lineLayer.borderWidth = ThumbnailCard.lineWidth
+        lineLayer.borderColor = .white
+        layer?.addSublayer(frameLayer)
+        frameLayer.addSublayer(imageLayer)
+        frameLayer.addSublayer(lineLayer)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    override var wantsUpdateLayer: Bool { true }
+    override var wantsUpdateLayer: Bool { true }  // nothing to draw; the layers carry the card
 
-    override func updateLayer() {
-        guard let layer else { return }
-        layer.contents = thumbnail
-        layer.contentsGravity = .resizeAspect
-        layer.backgroundColor = NSColor.windowBackgroundColor.cgColor
-        layer.cornerRadius = 8
-        layer.cornerCurve = .continuous
-        layer.masksToBounds = true
-        layer.borderWidth = 0.5
-        layer.borderColor = NSColor.separatorColor.cgColor
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        frameLayer.frame = bounds.insetBy(dx: ThumbnailCard.shadowRoom, dy: ThumbnailCard.shadowRoom)
+        frameLayer.shadowPath = CGPath(roundedRect: frameLayer.bounds, cornerWidth: ThumbnailCard.cornerRadius,
+                                       cornerHeight: ThumbnailCard.cornerRadius, transform: nil)
+        let image = frameLayer.bounds.insetBy(dx: ThumbnailCard.frameWidth + ThumbnailCard.lineWidth,
+                                              dy: ThumbnailCard.frameWidth + ThumbnailCard.lineWidth)
+        imageLayer.frame = image
+        lineLayer.frame = image.insetBy(dx: -ThumbnailCard.lineWidth, dy: -ThumbnailCard.lineWidth)
+        CATransaction.commit()
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
