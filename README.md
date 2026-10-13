@@ -30,7 +30,10 @@ The menu bar icon stays dimmed until steps 2 and 3 are done, and its menu links 
   extension hidden.
 - A card like macOS's floating thumbnail fades in at the bottom right and leaves after 5 seconds, or stays while the
   pointer is on it. Click it to open the screenshot in Preview, drag it into another app or a folder (they get a copy;
-  the saved file stays), swipe it away, or right-click for Show in Finder and Delete. macOS's own card can't be used:
+  the saved file stays), swipe it away, or right-click for Show in Finder and Delete.
+- Edits made after clicking the card follow onto the clipboard: when Preview saves the file (it does when you close
+  the window), the edited version replaces the copy on the clipboard. If you've copied something else since, that's
+  left alone. macOS's own card can't be used:
   it holds the image until it goes away, and dragging it means the file is never saved.
 - The app only receives the 🌐 key's up and down state. For other keys it just asks macOS how long ago one was
   last pressed. Between taps nothing runs. While the crosshair is up, the app waits for the system's `screencapture`

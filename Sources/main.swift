@@ -102,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         ThumbnailCard.hide()  // out of the way of the next capture
+        EditWatcher.stop()
         isCapturing = true
         let earlierCaptures = processIDs(named: "screencapture")
         let changeCount = NSPasteboard.general.changeCount
@@ -181,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(pointer, $0.frame, false) }) ?? NSScreen.main else { return }
         let scale = screen.backingScaleFactor
         let (screenFrame, visibleFrame) = (screen.frame, screen.visibleFrame)
+        let clipboardChangeCount = pasteboard.changeCount
         let file = ScreenshotFile.url(for: Date(), in: ScreenshotFile.folder)
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -190,7 +192,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let size = NSSize(width: thumbnail.pixels.width / scale, height: thumbnail.pixels.height / scale)
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {
-                        ThumbnailCard.show(thumbnail.image, size: size, file: file, screenFrame: screenFrame, visibleFrame: visibleFrame)
+                        ThumbnailCard.show(thumbnail.image, size: size, file: file, clipboardChangeCount: clipboardChangeCount,
+                                           screenFrame: screenFrame, visibleFrame: visibleFrame)
                     }
                 }
             } catch {

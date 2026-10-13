@@ -1,7 +1,7 @@
 // A stand-in for macOS's floating screenshot thumbnail, which macOS only shows for captures it saves to a file
 // itself. It fades in at the bottom right of the screen the capture was taken on, stays 5 seconds (as long as you like
-// while the pointer is on it), then slides away. Click to open in Preview, drag it into another app, swipe it off, or
-// right-click for Show in Finder and Delete.
+// while the pointer is on it), then slides away. Click to open in Preview (the clipboard then follows your edits), drag
+// it into another app, swipe it off, or right-click for Show in Finder and Delete.
 
 import AppKit
 import ImageIO
@@ -20,10 +20,12 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
     private static let margin: CGFloat = 12
     private static let stay: TimeInterval = 5
 
-    /// Shows the card for a saved capture, replacing any card already up. `size` is the capture's size in points.
-    static func show(_ thumbnail: CGImage, size: NSSize, file: URL, screenFrame: NSRect, visibleFrame: NSRect) {
+    /// Shows the card for a saved capture, replacing any card already up. `size` is the capture's size in points;
+    /// `clipboardChangeCount` is the clipboard's change count while it holds this capture.
+    static func show(_ thumbnail: CGImage, size: NSSize, file: URL, clipboardChangeCount: Int, screenFrame: NSRect, visibleFrame: NSRect) {
         current?.close(animated: false)
-        let card = ThumbnailCard(thumbnail, size: size, file: file, screenFrame: screenFrame, visibleFrame: visibleFrame)
+        let card = ThumbnailCard(thumbnail, size: size, file: file, clipboardChangeCount: clipboardChangeCount,
+                                 screenFrame: screenFrame, visibleFrame: visibleFrame)
         current = card
         card.fadeIn()
     }
@@ -47,15 +49,17 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
 
     private let thumbnail: CGImage
     private let file: URL
+    private let clipboardChangeCount: Int
     private let panel: NSPanel
     private let shownFrame: NSRect
     private let hiddenFrame: NSRect
     private var timer: Timer?
     private var isClosing = false
 
-    private init(_ thumbnail: CGImage, size: NSSize, file: URL, screenFrame: NSRect, visibleFrame: NSRect) {
+    private init(_ thumbnail: CGImage, size: NSSize, file: URL, clipboardChangeCount: Int, screenFrame: NSRect, visibleFrame: NSRect) {
         self.thumbnail = thumbnail
         self.file = file
+        self.clipboardChangeCount = clipboardChangeCount
         let scale = min(Self.maxImageSide / size.width, Self.maxImageSide / size.height, 1)
         let fitted = NSSize(width: size.width * scale, height: size.height * scale)
         let isThinStrip = min(fitted.width, fitted.height) < Self.minImageSide
@@ -122,6 +126,7 @@ final class ThumbnailCard: NSObject, NSDraggingSource {
     // MARK: Actions
 
     @objc fileprivate func open() {
+        EditWatcher.follow(file, changeCount: clipboardChangeCount)  // edits saved in Preview go to the clipboard too
         if let preview = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Preview") {
             NSWorkspace.shared.open([file], withApplicationAt: preview, configuration: NSWorkspace.OpenConfiguration())
         } else {
